@@ -88,7 +88,7 @@ try {
 
 ## Bundle size
 
-Under 50 KB gzipped. Zero external runtime dependencies except [Zod](https://zod.dev) and [jose](https://github.com/panva/jose) (0 CVEs).
+Under 50 KB gzipped. Two runtime dependencies: [Zod](https://zod.dev) and [jose](https://github.com/panva/jose) (0 CVEs). AWS SDK is optional (only needed for DynamoDB adapter in the template).
 
 ## License
 
