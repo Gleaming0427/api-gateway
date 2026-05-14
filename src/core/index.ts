@@ -1,4 +1,4 @@
-/** Public API surface for @julienchapron/api-gateway-core. */
+/** Public API surface for @armored1486/api-gateway-core. */
 export {
   AppError,
   UnauthorizedError,

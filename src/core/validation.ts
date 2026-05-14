@@ -1,7 +1,7 @@
 /**
  * Request validation wrapper around Zod. Throws ValidationError with parsed details on failure.
  */
-import { ZodSchema } from "zod";
+import type { ZodSchema } from "zod";
 import { ValidationError } from "./errors";
 
 /** Parses `data` against `schema`. Returns typed result or throws ValidationError. */

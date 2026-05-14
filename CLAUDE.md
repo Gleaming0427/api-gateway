@@ -35,7 +35,7 @@ npx prettier --write .
 
 This project is a **product**, not a portfolio piece. It serves two audiences:
 
-- **You (the builder)** — developing the core package (`@julienchapron/api-gateway-core`) and the SST template (`api-gateway-ha-template`).
+- **You (the builder)** — developing the core package (`@armored1486/api-gateway-core`) and the SST template (`api-gateway-ha-template`).
 - **Your client** — a B2B SaaS company that clones the template, configures their domain, and deploys to protect their customer-facing API.
 
 When a client runs `npx sst deploy --stage production`, they get a production-grade multi-region API Gateway with rate limiting, JWT auth, and DynamoDB Global Tables. Their API consumers get <100ms P99 latency globally. The client gets enterprise-grade API protection they'd otherwise pay thousands/month for (Kong, Tyk, AWS WAF Advanced).
@@ -89,7 +89,7 @@ src/
 
 This repo contains **two products** (see `docs/roadmap.md` for the business model):
 
-**1. `@julienchapron/api-gateway-core`** (npm package)
+**1. `@armored1486/api-gateway-core`** (npm package)
 Contains everything a developer needs to integrate rate limiting, JWT validation, and typed errors into their own infrastructure — without using SST.
 
 - Ships: `src/core/`, `src/types/`
@@ -100,7 +100,7 @@ Contains everything a developer needs to integrate rate limiting, JWT validation
 A cloneable SST project that wires the core package into a deployable multi-region API Gateway. The client clones this, configures their domain and secrets, and deploys.
 
 - Ships: `src/stacks/`, `src/functions/`, `src/adapters/`, `sst.config.ts`
-- Depends on: `@julienchapron/api-gateway-core`
+- Depends on: `@armored1486/api-gateway-core`
 
 ## Conventions
 
@@ -110,6 +110,7 @@ A cloneable SST project that wires the core package into a deployable multi-regi
 - **Error model** — All errors extend `AppError` (in `core/errors.ts`). HTTP status code + machine-readable `code` field. Lambda authorizer returns `{ isAuthorized, context }`.
 - **Testing** — `core/` tests are pure unit tests (vitest). Lambda handlers test with `sst dev --stage test`. Rate limiter tests use a real DynamoDB local table.
 - **TypeScript** — strict mode ON. Prefer `interface` for public contracts, `type` for unions/derived types. No `any` — use `unknown` and narrow.
+- **ESLint** — Flat config (`eslint.config.mjs`) enforcing TypeScript strictness, port boundary (`core/` never imports AWS SDK or template code), and `import type` for type-only imports. Test files are relaxed. Run `npx eslint .` before commits.
 - **Secrets** — JWKS URL, signing keys, and API keys live in AWS Secrets Manager, accessed via `sst.Secret`.
 - **Multi-region** — Every stack deploys identically to both regions. Region-specific config (domain, cert ARN) comes from `sst.Stage`-aware conditionals, never hardcoded.
 
@@ -149,13 +150,14 @@ async consume(key: string, tokens = 1): Promise<ConsumeResult>
 
 | File | Purpose |
 |---|---|
+| `eslint.config.mjs` | ESLint flat config — TypeScript strictness, port boundary enforcement, import conventions. |
 | `sst.config.ts` | SST root config. Together with `src/stacks/ApiStack.ts`, this is the deployable template your client clones. |
 | `src/stacks/ApiStack.ts` | The deployable infrastructure. Client runs `sst deploy` and gets a production-ready multi-region API Gateway. |
 | `src/functions/auth/authorizer.ts` | JWT Lambda authorizer — validates tokens from your client's customers. 5-min cache, RS256. |
 | `src/functions/gateway/proxy.ts` | Request pipeline: parse → rate-limit → forward. The 429 response is the first thing your client's customers see if they exceed their tier. |
 | `src/core/rate-limiter.ts` | Ships in the npm package. Token bucket algorithm, pluggable store. The competitive moat: pure logic, no AWS. |
 | `src/core/jwt.ts` | Ships in the npm package. RS256 token validation via pluggable JWKS fetcher. Zero AWS dependencies. |
-| `src/core/index.ts` | Entry point for `@julienchapron/api-gateway-core`. Public API surface: `AppError`, `RateLimiter`, `validateToken`, `validate`. |
+| `src/core/index.ts` | Entry point for `@armored1486/api-gateway-core`. Public API surface: `AppError`, `RateLimiter`, `validateToken`, `validate`. |
 | `src/adapters/dynamo.ts` | Template adapter. Implements `RateLimiterStore` against DynamoDB Global Tables. NOT in the npm package. |
 | `docs/deployment-guide.md` | Step-by-step guide a B2B SaaS CTO follows to deploy: domain, secrets, deploy, test. |
 | `scripts/benchmark.ts` | Local benchmark producing numbers used in sales decks. P99 consume() < 1ms local, < 5ms DynamoDB. |
@@ -197,5 +199,5 @@ These are not just engineering targets — they translate into SLAs your client 
 | "Why open source?" | The code is MIT. You can audit it, fork it, and customize it. You pay for implementation, not licensing. |
 
 ### Revenue Model
-- **Open source** (MIT): `@julienchapron/api-gateway-core` + `api-gateway-ha-template` — goal: GitHub stars, npm downloads, authority.
+- **Open source** (MIT): `@armored1486/api-gateway-core` + `api-gateway-ha-template` — goal: GitHub stars, npm downloads, authority.
 - **Consulting**: Audit (assessment + migration plan), Implementation (deploy + customize), Managed (ongoing maintenance).

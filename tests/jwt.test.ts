@@ -1,16 +1,22 @@
 import { describe, it, expect } from "vitest";
-import crypto from "crypto";
-import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
+import { SignJWT } from "jose";
 import { validateToken, JwksFetcher } from "../src/core/jwt";
 import { UnauthorizedError, InternalError } from "../src/core/errors";
 
-function generateKeyPair(): { publicKey: string; privateKey: string } {
+function generateKeyPair(): {
+  publicKey: string;
+  privateKey: crypto.KeyObject;
+} {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
     modulusLength: 2048,
     publicKeyEncoding: { type: "spki", format: "pem" },
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
   });
-  return { publicKey, privateKey };
+  return {
+    publicKey,
+    privateKey: crypto.createPrivateKey(privateKey),
+  };
 }
 
 const { publicKey, privateKey } = generateKeyPair();
@@ -28,23 +34,25 @@ const validOptions = {
   audience: "api-gateway",
 };
 
-function signToken(
+async function signToken(
   claims: Record<string, unknown>,
   overrides?: { kid?: string },
-): string {
-  // Only set expiresIn if claims don't already have exp
-  return jwt.sign(claims, privateKey, {
-    algorithm: "RS256",
-    keyid: overrides?.kid ?? "key-1",
-    ...(claims.exp === undefined ? { expiresIn: "1h" } : {}),
-  });
+): Promise<string> {
+  const builder = new SignJWT(claims)
+    .setProtectedHeader({ alg: "RS256", kid: overrides?.kid ?? "key-1" });
+
+  if (claims.exp === undefined) {
+    builder.setExpirationTime("1h");
+  }
+
+  return builder.sign(privateKey);
 }
 
 describe("validateToken", () => {
   const fetcher = createFetcher({ "key-1": publicKey });
 
   it("validates a valid token and returns payload", async () => {
-    const token = signToken({
+    const token = await signToken({
       sub: "user-123",
       iss: "https://auth.example.com",
       aud: "api-gateway",
@@ -56,7 +64,7 @@ describe("validateToken", () => {
   });
 
   it("returns custom claims in payload", async () => {
-    const token = signToken({
+    const token = await signToken({
       sub: "user-123",
       iss: "https://auth.example.com",
       aud: "api-gateway",
@@ -69,11 +77,14 @@ describe("validateToken", () => {
   });
 
   it("throws UnauthorizedError for expired token", async () => {
-    const token = jwt.sign(
-      { sub: "user-123", iss: "https://auth.example.com", aud: "api-gateway" },
-      privateKey,
-      { algorithm: "RS256", keyid: "key-1", expiresIn: "0s" },
-    );
+    const token = await new SignJWT({
+      sub: "user-123",
+      iss: "https://auth.example.com",
+      aud: "api-gateway",
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "key-1" })
+      .setExpirationTime("0s")
+      .sign(privateKey);
     await new Promise((r) => setTimeout(r, 50));
     await expect(
       validateToken(token, validOptions, fetcher),
@@ -82,18 +93,21 @@ describe("validateToken", () => {
 
   it("throws UnauthorizedError for wrong signature", async () => {
     const { privateKey: otherKey } = generateKeyPair();
-    const token = jwt.sign(
-      { sub: "user-123", iss: "https://auth.example.com", aud: "api-gateway" },
-      otherKey,
-      { algorithm: "RS256", keyid: "key-1" },
-    );
+    const token = await new SignJWT({
+      sub: "user-123",
+      iss: "https://auth.example.com",
+      aud: "api-gateway",
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "key-1" })
+      .setExpirationTime("1h")
+      .sign(otherKey);
     await expect(
       validateToken(token, validOptions, fetcher),
     ).rejects.toThrow(UnauthorizedError);
   });
 
   it("throws UnauthorizedError when iss does not match", async () => {
-    const token = signToken({
+    const token = await signToken({
       sub: "user-123",
       iss: "https://wrong-issuer.com",
       aud: "api-gateway",
@@ -104,7 +118,7 @@ describe("validateToken", () => {
   });
 
   it("throws UnauthorizedError when aud does not match", async () => {
-    const token = signToken({
+    const token = await signToken({
       sub: "user-123",
       iss: "https://auth.example.com",
       aud: "wrong-audience",
@@ -115,35 +129,41 @@ describe("validateToken", () => {
   });
 
   it("throws UnauthorizedError when header has no kid", async () => {
-    const token = jwt.sign(
-      { sub: "user-123", iss: "https://auth.example.com", aud: "api-gateway" },
-      privateKey,
-      { algorithm: "RS256" },
-    );
+    const token = await new SignJWT({
+      sub: "user-123",
+      iss: "https://auth.example.com",
+      aud: "api-gateway",
+    })
+      .setProtectedHeader({ alg: "RS256" })
+      .setExpirationTime("1h")
+      .sign(privateKey);
     await expect(
       validateToken(token, validOptions, fetcher),
     ).rejects.toThrow(UnauthorizedError);
   });
 
   it("throws UnauthorizedError when alg is not RS256", async () => {
-    // Manually craft a JWT with HS256 using a symmetric key
-    const hs256Key = crypto.randomBytes(32).toString("hex");
-    const token = jwt.sign(
-      { sub: "user-123", iss: "https://auth.example.com", aud: "api-gateway" },
-      hs256Key,
-      { algorithm: "HS256", keyid: "key-1" },
-    );
+    const token = await new SignJWT({
+      sub: "user-123",
+      iss: "https://auth.example.com",
+      aud: "api-gateway",
+    })
+      .setProtectedHeader({ alg: "HS256", kid: "key-1" })
+      .setExpirationTime("1h")
+      .sign(crypto.randomBytes(32));
     await expect(
       validateToken(token, validOptions, fetcher),
     ).rejects.toThrow(UnauthorizedError);
   });
 
   it("throws UnauthorizedError when token is missing sub", async () => {
-    const token = jwt.sign(
-      { iss: "https://auth.example.com", aud: "api-gateway" },
-      privateKey,
-      { algorithm: "RS256", keyid: "key-1" },
-    );
+    const token = await new SignJWT({
+      iss: "https://auth.example.com",
+      aud: "api-gateway",
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "key-1" })
+      .setExpirationTime("1h")
+      .sign(privateKey);
     await expect(
       validateToken(token, validOptions, fetcher),
     ).rejects.toThrow(UnauthorizedError);
@@ -155,7 +175,7 @@ describe("validateToken", () => {
         throw new Error("network error");
       },
     };
-    const token = signToken({
+    const token = await signToken({
       sub: "user-123",
       iss: "https://auth.example.com",
       aud: "api-gateway",
@@ -167,7 +187,7 @@ describe("validateToken", () => {
 
   it("throws InternalError when fetcher returns empty key", async () => {
     const emptyFetcher = createFetcher({ "key-1": "" });
-    const token = signToken({
+    const token = await signToken({
       sub: "user-123",
       iss: "https://auth.example.com",
       aud: "api-gateway",
@@ -179,17 +199,15 @@ describe("validateToken", () => {
 
   it("clockTolerance allows slightly expired token", async () => {
     const past = Math.floor(Date.now() / 1000) - 4;
-    const token = jwt.sign(
-      {
-        sub: "user-123",
-        iss: "https://auth.example.com",
-        aud: "api-gateway",
-        iat: past - 3600,
-        exp: past,
-      },
-      privateKey,
-      { algorithm: "RS256", keyid: "key-1" },
-    );
+    const token = await new SignJWT({
+      sub: "user-123",
+      iss: "https://auth.example.com",
+      aud: "api-gateway",
+      iat: past - 3600,
+      exp: past,
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "key-1" })
+      .sign(privateKey);
     const payload = await validateToken(
       token,
       { ...validOptions, clockTolerance: 5 },
@@ -200,17 +218,15 @@ describe("validateToken", () => {
 
   it("clockTolerance beyond threshold still throws", async () => {
     const past = Math.floor(Date.now() / 1000) - 6;
-    const token = jwt.sign(
-      {
-        sub: "user-123",
-        iss: "https://auth.example.com",
-        aud: "api-gateway",
-        iat: past - 3600,
-        exp: past,
-      },
-      privateKey,
-      { algorithm: "RS256", keyid: "key-1" },
-    );
+    const token = await new SignJWT({
+      sub: "user-123",
+      iss: "https://auth.example.com",
+      aud: "api-gateway",
+      iat: past - 3600,
+      exp: past,
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "key-1" })
+      .sign(privateKey);
     await expect(
       validateToken(token, { ...validOptions, clockTolerance: 5 }, fetcher),
     ).rejects.toThrow(UnauthorizedError);

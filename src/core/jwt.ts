@@ -2,7 +2,17 @@
  * JWT RS256 validation with pluggable JWKS fetcher.
  * Validates signature, expiry, issuer, and audience. Pure logic — no AWS imports.
  */
-import jwt from "jsonwebtoken";
+import {
+  jwtVerify,
+  decodeProtectedHeader,
+  importSPKI,
+} from "jose";
+import {
+  JWTExpired,
+  JWTClaimValidationFailed,
+  JWTInvalid,
+  JWSSignatureVerificationFailed,
+} from "jose/errors";
 import { UnauthorizedError, InternalError } from "./errors";
 
 export interface JwksFetcher {
@@ -31,13 +41,15 @@ export async function validateToken(
   options: JwtOptions,
   fetchKey: JwksFetcher,
 ): Promise<JwtPayload> {
-  // Decode header without verifying to extract kid and alg
-  const decoded = jwt.decode(token, { complete: true });
-  if (decoded === null || typeof decoded === "string") {
+  // Decode protected header without verifying
+  let header: { kid?: string; alg?: string };
+  try {
+    header = decodeProtectedHeader(token);
+  } catch {
     throw new UnauthorizedError("Invalid token format");
   }
 
-  const { kid, alg } = decoded.header;
+  const { kid, alg } = header;
 
   if (!kid) {
     throw new UnauthorizedError("Token header missing kid");
@@ -48,52 +60,59 @@ export async function validateToken(
   }
 
   // Fetch the public key
-  let publicKey: string;
+  let publicKeyPem: string;
   try {
     const key = await fetchKey.getKey(kid);
     if (!key) {
-      throw new InternalError(`No key found for kid`);
+      throw new InternalError("No key found for kid");
     }
-    publicKey = key;
+    publicKeyPem = key;
   } catch (err) {
     if (err instanceof UnauthorizedError || err instanceof InternalError)
       throw err;
     throw new InternalError("JWKS fetch failed", err);
   }
 
-  // Verify signature
-  let payload: JwtPayload;
+  // Import public key and verify
+  let publicKey: Awaited<ReturnType<typeof importSPKI>>;
   try {
-    payload = jwt.verify(token, publicKey, {
-      algorithms: ["RS256"],
+    publicKey = await importSPKI(publicKeyPem, alg);
+  } catch {
+    throw new UnauthorizedError("Invalid public key");
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, publicKey, {
       issuer: options.issuer,
       audience: options.audience,
       clockTolerance: options.clockTolerance ?? 0,
-    }) as JwtPayload;
+    });
+
+    if (!payload.sub) {
+      throw new UnauthorizedError("Token missing sub claim");
+    }
+
+    return payload as unknown as JwtPayload;
   } catch (err) {
-    if (err instanceof jwt.JsonWebTokenError) {
-      const message = err.message.toLowerCase();
-      if (message.includes("expired")) {
-        throw new UnauthorizedError("Token has expired");
-      }
-      if (message.includes("issuer")) {
+    if (err instanceof JWTExpired) {
+      throw new UnauthorizedError("Token has expired");
+    }
+    if (err instanceof JWTClaimValidationFailed) {
+      if (err.claim === "iss") {
         throw new UnauthorizedError("Invalid token issuer");
       }
-      if (message.includes("audience")) {
+      if (err.claim === "aud") {
         throw new UnauthorizedError("Invalid token audience");
       }
+      throw new UnauthorizedError(`Invalid token claim: ${err.claim}`);
+    }
+    if (err instanceof JWTInvalid) {
       throw new UnauthorizedError("Invalid token signature");
     }
-    if (err instanceof jwt.NotBeforeError) {
-      throw new UnauthorizedError("Token not yet valid");
+    if (err instanceof JWSSignatureVerificationFailed) {
+      throw new UnauthorizedError("Invalid token signature");
     }
+    if (err instanceof UnauthorizedError) throw err;
     throw new InternalError("Token verification failed", err);
   }
-
-  // Validate sub is present
-  if (!payload.sub) {
-    throw new UnauthorizedError("Token missing sub claim");
-  }
-
-  return payload;
 }

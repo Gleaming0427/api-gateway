@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   RateLimiter,
-  RateLimiterStore,
-  BucketState,
+  type RateLimiterStore,
+  type BucketState,
+  type ConsumeResult,
 } from "../src/core/rate-limiter";
 import { InternalError } from "../src/core/errors";
 
@@ -141,7 +142,7 @@ describe("RateLimiter", () => {
     );
     // At least some should have been processed
     const allowed = results.filter(
-      (r) => r !== null && (r as ConsumeResult).allowed,
+      (r) => r !== null && r.allowed,
     );
     expect(allowed.length).toBeGreaterThan(0);
     // With capacity=10 and refillRate=5/s over concurrent requests, max ~10 allowed
