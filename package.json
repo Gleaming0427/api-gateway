@@ -4,9 +4,13 @@
   "publishConfig": {
     "access": "public"
   },
+  "author": "Julien Chapron <jigsaw_culpable558@simplelogin.com>",
   "description": "Serverless-native API Gateway core — rate limiting, JWT auth, typed errors for B2B SaaS",
   "license": "MIT",
-  "repository": "github:Gleaming0427/api-gateway",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gleaming0427/api-gateway.git"
+  },
   "homepage": "https://github.com/Gleaming0427/api-gateway#readme",
   "bugs": "https://github.com/Gleaming0427/api-gateway/issues",
   "keywords": [
@@ -48,8 +52,8 @@
     "zod": "3.24.0"
   },
   "peerDependencies": {
-    "@aws-sdk/client-dynamodb": "^3.700.0",
-    "@aws-sdk/lib-dynamodb": "^3.700.0"
+    "@aws-sdk/client-dynamodb": "3.700.0",
+    "@aws-sdk/lib-dynamodb": "3.700.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-dynamodb": {
