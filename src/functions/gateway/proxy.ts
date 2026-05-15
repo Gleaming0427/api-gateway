@@ -1,8 +1,8 @@
 /**
  * API Gateway proxy handler. Pipeline: rate-limit → forward to upstream → return response.
- * Uses the apiKeyId from the authorizer context as the rate-limit key.
+ * Compatible with API Gateway REST API (V1), HTTP API (V2), and Lambda Function URL.
  */
-import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import type { APIGatewayProxyResult } from "aws-lambda";
 import { Resource } from "sst";
 import { RateLimiter } from "../../core/rate-limiter";
 import { AppError, InternalError } from "../../core/errors";
@@ -32,20 +32,46 @@ const STRIP_HEADERS = new Set([
   "x-forwarded-proto",
 ]);
 
-/** Handler for API Gateway REST API proxy integration. */
-export async function handler(
-  event: APIGatewayProxyEvent,
-): Promise<APIGatewayProxyResult> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- proxy handles multiple event shapes (V1, V2, Function URL)
+type ProxyEvent = Record<string, any>;
+
+/** Extracts the HTTP method from any event shape. */
+function getMethod(e: ProxyEvent): string {
+  return e.httpMethod ?? e.requestContext?.http?.method ?? "GET";
+}
+
+/** Extracts the path from any event shape. */
+function getPath(e: ProxyEvent): string {
+  return e.rawPath ?? e.path ?? "/";
+}
+
+/** Extracts headers from any event shape (normalized to Record<string, string | undefined>). */
+function getHeaders(e: ProxyEvent): Record<string, string | undefined> {
+  return e.headers ?? {};
+}
+
+/** Extracts query string parameters from any event shape. */
+function getQueryParams(e: ProxyEvent): Record<string, string | undefined> | null {
+  return e.queryStringParameters ?? e.rawQueryString?.length
+    ? Object.fromEntries(new URLSearchParams(e.rawQueryString))
+    : null;
+}
+
+/** Extracts the authorizer context from any event shape. */
+function getAuthorizer(e: ProxyEvent): Record<string, string> | undefined {
+  return e.requestContext?.authorizer as Record<string, string> | undefined;
+}
+
+/** Handler compatible with API Gateway REST, HTTP, and Lambda Function URL. */
+export async function handler(event: ProxyEvent): Promise<APIGatewayProxyResult> {
   try {
-    const authorizer = event.requestContext.authorizer as
-      | Record<string, string>
-      | undefined;
+    const authorizer = getAuthorizer(event);
 
     // Staging protection: if STAGING_TOKEN is configured, require it in the Authorization header.
-    // This prevents an open proxy when the staging URL is deployed publicly.
     const stagingToken = process.env.STAGING_TOKEN;
     if (stagingToken && !authorizer?.apiKeyId) {
-      const auth = event.headers["authorization"] ?? event.headers.Authorization ?? "";
+      const headers = getHeaders(event);
+      const auth = headers["authorization"] ?? headers.Authorization ?? "";
       if (auth !== `Bearer ${stagingToken}`) {
         return {
           statusCode: 401,
@@ -55,8 +81,8 @@ export async function handler(
       }
     }
 
-    // In staging/dev the authorizer is skipped — use the sub claim or the staging token as the key, or a fixed dev key.
-    const apiKeyId = authorizer?.apiKeyId ?? authorizer?.sub ?? stagingToken ?? "dev-test-key";
+    // Use `||` not `??` — empty string env vars are falsy but not nullish.
+    const apiKeyId = authorizer?.apiKeyId || authorizer?.sub || stagingToken || "dev-test-key";
 
     // Rate limit check
     const result = await rateLimiter.consume(apiKeyId);
@@ -89,12 +115,12 @@ export async function handler(
 }
 
 /** Forwards the API Gateway event as an HTTP request to the upstream. */
-async function forwardRequest(
-  event: APIGatewayProxyEvent,
-  baseUrl: string,
-): Promise<Response> {
-  const targetUrl = buildTargetUrl(baseUrl, event.path, event.queryStringParameters);
-  const headers = filterForwardHeaders(event.headers);
+async function forwardRequest(event: ProxyEvent, baseUrl: string): Promise<Response> {
+  const path = getPath(event);
+  const queryParams = getQueryParams(event);
+  const headers = filterForwardHeaders(getHeaders(event));
+
+  const targetUrl = buildTargetUrl(baseUrl, path, queryParams);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => {
@@ -103,7 +129,7 @@ async function forwardRequest(
 
   try {
     return await fetch(targetUrl, {
-      method: event.httpMethod,
+      method: getMethod(event),
       headers,
       body: event.body ? event.body : undefined,
       signal: controller.signal,

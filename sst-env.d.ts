@@ -6,8 +6,9 @@
 
 declare module "sst" {
   export interface Resource {
-    "ApiGateway": {
-      "type": "sst.aws.ApiGatewayV1"
+    "GatewayFunction": {
+      "name": string
+      "type": "sst.aws.Function"
       "url": string
     }
     "RateLimitTable": {

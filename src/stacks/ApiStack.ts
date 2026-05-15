@@ -1,7 +1,7 @@
 /**
  * API Gateway HA infrastructure stack.
- * Creates: DynamoDB Table, Lambda proxy, REST API Gateway.
- * Production adds: Lambda authorizer + JWT secrets + custom domain.
+ * Staging: Lambda Function URL (direct, no auth, fast to test).
+ * Production: REST API Gateway with JWT authorizer + custom domain.
  */
 export function createApiStack() {
   const isProd = $app.stage === "production";
@@ -15,30 +15,21 @@ export function createApiStack() {
     primaryIndex: { hashKey: "pk" },
   });
 
-  // ── API Gateway REST API ─────────────────────────────────────────────
-  const domain = isProd
-    ? { name: `api.${$app.name}.com`, dns: sst.aws.dns() }
-    : undefined;
+  // ── Lambda Proxy ─────────────────────────────────────────────────────
+  // Explicit Function (not api.route) so link and environment are guaranteed
+  // to be injected by SST. SST's api.route creates a wrapper Lambda that
+  // does NOT inherit link/env from the handler config object.
 
-  const api = new sst.aws.ApiGatewayV1("ApiGateway", {
-    cors: true,
-    accessLog: { retention: "1 month" },
-    domain,
-    endpoint: { type: "regional" },
-  });
-
-  // ── Proxy route (both staging and production) ────────────────────────
-  // The route config object passes link/permissions/env directly to the
-  // auto-created Lambda, avoiding the need for a separate Function resource.
-
-  const proxyRoute = {
-    handler: "src/functions/gateway/proxy.handler" as const,
+  const gatewayFn = new sst.aws.Function("GatewayFunction", {
+    handler: "src/functions/gateway/proxy.handler",
+    runtime: "nodejs22.x",
+    architecture: "arm64",
+    memory: "512 MB",
+    timeout: "30 seconds",
     link: [upstreamApiUrl, rateLimitTable],
     environment: {
       RATE_LIMIT_CAPACITY: "100",
       RATE_LIMIT_REFILL_RATE: "10",
-      // Set via `sst secret set StagingToken <token> --stage staging`
-      // If empty, the staging proxy is open (local dev convenience).
       STAGING_TOKEN: "",
     },
     permissions: [
@@ -47,38 +38,47 @@ export function createApiStack() {
         resources: [rateLimitTable.arn],
       },
     ],
-    logging: { retention: "1 month" as const },
-  };
+    url: !isProd, // Staging: direct Function URL. Production: API Gateway handles routing.
+    logging: { retention: "1 month" },
+  });
 
-  // ── Auth (production only) ───────────────────────────────────────────
-  if (isProd) {
-    const jwksUrl = new sst.Secret("JwksUrl");
-    const jwtIssuer = new sst.Secret("JwtIssuer");
-    const jwtAudience = new sst.Secret("JwtAudience");
+  // ── Staging: return early (Function URL is enough) ───────────────────
 
-    const authorizerFn = new sst.aws.Function("AuthorizerFunction", {
-      handler: "src/functions/auth/authorizer.handler",
-      runtime: "nodejs22.x",
-      architecture: "arm64",
-      memory: "512 MB",
-      timeout: "10 seconds",
-      link: [jwksUrl, jwtIssuer, jwtAudience],
-      logging: { retention: "1 month" },
-    });
+  if (!isProd) return;
 
-    const tokenAuthorizer = api.addAuthorizer({
-      name: "TokenAuthorizer",
-      tokenFunction: authorizerFn,
-      ttl: 300,
-      identitySource: "method.request.header.Authorization",
-    });
+  // ── Production: API Gateway + Authorizer ─────────────────────────────
 
-    api.route("ANY /{proxy+}", proxyRoute, {
-      auth: { custom: { id: tokenAuthorizer.id } },
-    });
-  } else {
-    api.route("ANY /{proxy+}", proxyRoute);
-  }
+  const jwksUrl = new sst.Secret("JwksUrl");
+  const jwtIssuer = new sst.Secret("JwtIssuer");
+  const jwtAudience = new sst.Secret("JwtAudience");
+
+  const authorizerFn = new sst.aws.Function("AuthorizerFunction", {
+    handler: "src/functions/auth/authorizer.handler",
+    runtime: "nodejs22.x",
+    architecture: "arm64",
+    memory: "512 MB",
+    timeout: "10 seconds",
+    link: [jwksUrl, jwtIssuer, jwtAudience],
+    logging: { retention: "1 month" },
+  });
+
+  const api = new sst.aws.ApiGatewayV1("ApiGateway", {
+    cors: true,
+    accessLog: { retention: "1 month" },
+    domain: { name: `api.${$app.name}.com`, dns: sst.aws.dns() },
+    endpoint: { type: "regional" },
+  });
+
+  const tokenAuthorizer = api.addAuthorizer({
+    name: "TokenAuthorizer",
+    tokenFunction: authorizerFn,
+    ttl: 300,
+    identitySource: "method.request.header.Authorization",
+  });
+
+  api.route("ANY /{proxy+}", gatewayFn, {
+    auth: { custom: { id: tokenAuthorizer.id } },
+  });
 
   api.deploy();
 }
