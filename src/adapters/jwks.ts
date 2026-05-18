@@ -35,7 +35,12 @@ export class CachedJwksFetcher implements JwksFetcher {
     }
 
     try {
-      const response = await fetch(this.jwksUrl);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => {
+        controller.abort();
+      }, 5_000);
+      const response = await fetch(this.jwksUrl, { signal: controller.signal });
+      clearTimeout(timeout);
 
       if (!response.ok) {
         throw new Error(

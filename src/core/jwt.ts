@@ -23,6 +23,7 @@ export interface JwtOptions {
   issuer: string;
   audience: string;
   clockTolerance?: number; // seconds
+  maxTokenAge?: number; // seconds since iat — rejects tokens older than this
 }
 
 export interface JwtPayload {
@@ -90,6 +91,14 @@ export async function validateToken(
 
     if (!payload.sub) {
       throw new UnauthorizedError("Token missing sub claim");
+    }
+
+    // Enforce maxTokenAge when configured
+    if (options.maxTokenAge !== undefined && payload.iat) {
+      const ageSeconds = Math.floor(Date.now() / 1000) - payload.iat;
+      if (ageSeconds > options.maxTokenAge) {
+        throw new UnauthorizedError("Token exceeds maximum age");
+      }
     }
 
     return payload as unknown as JwtPayload;

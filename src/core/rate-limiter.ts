@@ -12,6 +12,13 @@ export interface BucketState {
 export interface RateLimiterStore {
   get(key: string): Promise<BucketState | null>;
   set(key: string, state: BucketState): Promise<void>;
+  /** Atomically consume tokens. When implemented, replaces get-then-set to prevent TOCTOU race conditions under concurrency. Returns null when the atomic operation could not be completed (caller should retry or fall back). */
+  atomicConsume?(
+    key: string,
+    tokens: number,
+    capacity: number,
+    refillRate: number,
+  ): Promise<ConsumeResult | null>;
 }
 
 export interface ConsumeResult {
@@ -29,6 +36,8 @@ export class RateLimiter {
 
   /** Consumes `tokens` for `key`. Returns allowed/denied with remaining count and optional retry delay. */
   async consume(key: string, tokens = 1): Promise<ConsumeResult> {
+    if (tokens < 0) throw new InternalError("tokens must be non-negative");
+
     if (this.options.capacity === 0) {
       return { allowed: false, remaining: 0, retryAfter: Infinity };
     }
@@ -45,6 +54,21 @@ export class RateLimiter {
     }
 
     try {
+      // Prefer atomic consume to prevent TOCTOU race conditions under concurrency
+      if (this.store.atomicConsume) {
+        const result = await this.store.atomicConsume(
+          key,
+          tokens,
+          this.options.capacity,
+          this.options.refillRate,
+        );
+        if (result === null) {
+          throw new InternalError("Atomic consume failed — concurrent write detected");
+        }
+        return result;
+      }
+
+      // Fallback: get-then-set (not atomic, accepts rare over-consumption)
       const existing = await this.store.get(key);
       const now = Date.now();
 

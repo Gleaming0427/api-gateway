@@ -62,6 +62,15 @@ function getAuthorizer(e: ProxyEvent): Record<string, string> | undefined {
   return e.requestContext?.authorizer as Record<string, string> | undefined;
 }
 
+/** Extracts the source IP from any event shape. */
+function getSourceIp(e: ProxyEvent): string {
+  /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
+  return e.requestContext?.http?.sourceIp ??
+    e.requestContext?.identity?.sourceIp ??
+    "unknown";
+  /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
+}
+
 /** Handler compatible with API Gateway REST, HTTP, and Lambda Function URL. */
 export async function handler(event: ProxyEvent): Promise<APIGatewayProxyResult> {
   try {
@@ -81,8 +90,14 @@ export async function handler(event: ProxyEvent): Promise<APIGatewayProxyResult>
       }
     }
 
-    // Use `||` not `??` — empty string env vars are falsy but not nullish.
-    const apiKeyId = authorizer?.apiKeyId || authorizer?.sub || stagingToken || "dev-test-key";
+    // When a JWT authorizer is present, rate-limit per apiKeyId or sub.
+    // Without an authorizer (staging/dev), append the source IP so different
+    // callers don't share a single bucket (avoids self-throttling under load tests).
+    const apiKeyId =
+      authorizer?.apiKeyId ||
+      authorizer?.sub ||
+      (stagingToken ? `${stagingToken}:${getSourceIp(event)}` : undefined) ||
+      "dev-test-key";
 
     // Rate limit check
     const result = await rateLimiter.consume(apiKeyId);
@@ -148,13 +163,20 @@ async function forwardRequest(event: ProxyEvent, baseUrl: string): Promise<Respo
   }
 }
 
-/** Builds the full target URL with path and query string. */
+/** Builds the full target URL with path and query string. Rejects absolute paths to prevent SSRF via URL parser confusion (e.g. "//evil.com" resolves to evil.com). */
 function buildTargetUrl(
   baseUrl: string,
   path: string,
   queryParams: Record<string, string | undefined> | null,
 ): string {
+  if (!path.startsWith("/") || path.startsWith("//")) {
+    throw new InternalError("Invalid request path");
+  }
   const url = new URL(path, baseUrl);
+  const base = new URL(baseUrl);
+  if (url.origin !== base.origin) {
+    throw new InternalError("Invalid request path");
+  }
   if (queryParams) {
     for (const [key, value] of Object.entries(queryParams)) {
       if (value !== undefined) {
@@ -178,12 +200,24 @@ function filterForwardHeaders(
   return filtered;
 }
 
+/** Response headers explicitly whitelisted for forwarding to the client. Prevents leaking internal headers (x-powered-by, x-debug-trace, x-amzn-requestid, etc.). */
+const ALLOWED_RESPONSE_HEADERS = new Set([
+  "content-type",
+  "content-length",
+  "cache-control",
+  "etag",
+  "last-modified",
+  "x-request-id",
+  "x-ratelimit-remaining",
+  "x-ratelimit-limit",
+  "x-ratelimit-reset",
+]);
+
 /** Returns only safe response headers forwarded to the client. */
 function filterResponseHeaders(headers: Headers): Record<string, string> {
   const filtered: Record<string, string> = {};
   headers.forEach((value, key) => {
-    const lower = key.toLowerCase();
-    if (lower === "content-type" || lower === "content-length" || lower.startsWith("x-")) {
+    if (ALLOWED_RESPONSE_HEADERS.has(key.toLowerCase())) {
       filtered[key] = value;
     }
   });
