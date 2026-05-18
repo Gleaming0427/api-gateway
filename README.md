@@ -29,7 +29,7 @@ const result = await limiter.consume("api-key-abc");
 // { allowed: false, remaining: 0, retryAfter: 5.2 }
 ```
 
-The store is **pluggable** — implement `get(key)` and `set(key, state)` using any backend (DynamoDB, Redis, PostgreSQL). The rate limiter is pure logic with zero runtime dependencies.
+The store is **pluggable** — implement `get(key)`, `set(key, state)`, and optionally `atomicConsume(key, tokens, capacity, refillRate)` using any backend (DynamoDB, Redis, PostgreSQL). The optional `atomicConsume` prevents TOCTOU race conditions under concurrency. The rate limiter is pure logic with zero runtime dependencies.
 
 ## JWT validation
 
@@ -47,6 +47,8 @@ const fetcher: JwksFetcher = {
 const payload = await validateToken(token, {
   issuer: "https://auth.example.com",
   audience: "api-gateway",
+  maxTokenAge: 86_400, // 24h — reject tokens older than this
+  clockTolerance: 30,  // 30s clock skew
 }, fetcher);
 // { sub: "user-123", iss: "...", aud: "...", exp: 1712345678, ... }
 ```

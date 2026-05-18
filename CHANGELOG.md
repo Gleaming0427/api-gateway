@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.0 — Security hardening (2026-05-18)
+
+### Security fixes
+- **CRITICAL**: SSRF protection in proxy URL builder — rejects `//authority` paths and verifies origin after URL resolution
+- **MEDIUM**: Atomic rate limiter writes via `UpdateItem` + `ConditionExpression` (TOCTOU race condition fix)
+- **MEDIUM**: 5-second timeout on JWKS fetch (prevents Lambda authorizer DoS)
+- **MEDIUM**: Response header whitelist — replaces `x-*` wildcard, prevents internal header leakage
+- **LOW**: Negative token validation in `RateLimiter.consume()`
+- **LOW**: `maxTokenAge` JWT option — rejects tokens exceeding a configurable age
+- **INFO**: Staging rate-limit key now includes source IP (prevents self-throttling under load tests)
+
+### Breaking changes
+- `RateLimiterStore` gains optional `atomicConsume` method
+- `JwtOptions` gains optional `maxTokenAge` field
+- Response headers use explicit whitelist instead of `x-*` pass-through
+
 ## 1.0.x — Phase 2 (2026-05-14)
 
 ### Added

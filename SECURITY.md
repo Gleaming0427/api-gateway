@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 1.x | ✅ |
+| 2.x | ✅ |
+| 1.x | ❌ |
 
 ## Reporting a vulnerability
 
@@ -22,6 +23,10 @@ Dependencies are pinned to exact versions. Run `npm audit` in CI on every push.
 
 - JWT validation is fail-closed — any error returns Deny
 - Rate limiter runs before any upstream call
-- SSRF protection: `fetch({ redirect: "manual" })`
+- SSRF protection: path validation (rejects `//authority` paths) + origin check + `fetch({ redirect: "manual" })`
+- Response header whitelist — only safe headers forwarded to the client (no `x-powered-by`, `x-debug-trace`, `x-amzn-requestid`)
+- JWKS fetch has a 5-second timeout — prevents Lambda authorizer hanging on unresponsive endpoints
+- Rate limiter uses atomic DynamoDB writes (UpdateItem + ConditionExpression) to prevent TOCTOU over-consumption
+- JWT `maxTokenAge` enforcement — rejects tokens older than a configurable threshold
 - Secrets via SST encrypted state, never in code
 - Lambda authorizer logs `sub` and `kid`, never the token
