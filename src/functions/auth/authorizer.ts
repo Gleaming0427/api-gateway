@@ -4,6 +4,7 @@
  * Fail-closed: any error results in a Deny policy.
  */
 import { decodeProtectedHeader } from "jose";
+import { createHash } from "node:crypto";
 import type {
   APIGatewayTokenAuthorizerEvent,
   APIGatewayAuthorizerResult,
@@ -20,6 +21,7 @@ const jwtOptions: JwtOptions = {
   issuer: process.env.JWT_ISSUER!,
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   audience: process.env.JWT_AUDIENCE!,
+  maxTokenAge: Number(process.env.MAX_TOKEN_AGE) || 86400, // 24h default
 };
 
 /** Shared JWKS fetcher — lives across warm Lambda invocations. */
@@ -41,7 +43,7 @@ export async function handler(
 
     console.log({
       event: "authorized",
-      sub: payload.sub,
+      sub: hashSub(payload.sub),
       kid,
     });
 
@@ -58,7 +60,7 @@ export async function handler(
 
     console.error({
       event: "authorizer_error",
-      error: err instanceof Error ? err.message : String(err),
+      error: err instanceof Error ? err.constructor.name : typeof err,
     });
     return deny(methodArn);
   }
@@ -70,6 +72,11 @@ function extractBearerToken(header: string): string | null {
   const parts = header.split(" ");
   if (parts.length !== 2 || parts[0]?.toLowerCase() !== "bearer") return null;
   return parts[1] ?? null;
+}
+
+/** Returns a truncated SHA-256 hex digest of `sub` for audit-safe logging. */
+function hashSub(sub: string): string {
+  return createHash("sha256").update(sub).digest("hex").slice(0, 12);
 }
 
 /** Decodes the JWT header to extract the kid for logging. */

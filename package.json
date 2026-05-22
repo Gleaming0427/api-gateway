@@ -48,8 +48,8 @@
     "generate-token": "npx tsx scripts/generate-token.ts"
   },
   "dependencies": {
-    "jose": "^6.2.3",
-    "zod": "^3.25.76"
+    "jose": "6.2.3",
+    "zod": "3.25.76"
   },
   "peerDependencies": {
     "@aws-sdk/client-dynamodb": "^3.699.0",

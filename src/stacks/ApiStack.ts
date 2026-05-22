@@ -34,7 +34,7 @@ export function createApiStack() {
     },
     permissions: [
       {
-        actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
+        actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
         resources: [rateLimitTable.arn],
       },
     ],
@@ -59,6 +59,9 @@ export function createApiStack() {
     memory: "512 MB",
     timeout: "10 seconds",
     link: [jwksUrl, jwtIssuer, jwtAudience],
+    environment: {
+      MAX_TOKEN_AGE: "86400", // 24h — reject tokens older than this regardless of exp
+    },
     logging: { retention: "1 month" },
   });
 
